@@ -1,3 +1,5 @@
+declare const global: any;
+
 import { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -386,7 +388,8 @@ function resizeRGBToFloat32(
   srcWidth: number,
   srcHeight: number,
   dstWidth: number,
-  dstHeight: number
+  dstHeight: number,
+  orientation: string
 ): Float32Array {
   'worklet';
   const src = new Uint8Array(srcBuffer);
@@ -400,23 +403,41 @@ function resizeRGBToFloat32(
   const globalRef2 = global as any;
   if (!globalRef2.__resizeLogOnce) {
     globalRef2.__resizeLogOnce = true;
-    console.log('[RESIZE_DBG] srcLen=' + src.length + ' totalPixels=' + totalPixels + ' bytesPerPixel=' + bytesPerPixel);
+    console.log('[RESIZE_DBG] srcLen=' + src.length + ' totalPixels=' + totalPixels + ' bytesPerPixel=' + bytesPerPixel + ' orientation=' + orientation);
   }
 
-  const xRatio = srcWidth / dstWidth;
-  const yRatio = srcHeight / dstHeight;
-
   for (let y = 0; y < dstHeight; y++) {
-    const srcY = Math.min(Math.floor(y * yRatio), srcHeight - 1);
+    const yNorm = y / dstHeight;
     for (let x = 0; x < dstWidth; x++) {
-      const srcX = Math.min(Math.floor(x * xRatio), srcWidth - 1);
+      const xNorm = x / dstWidth;
+
+      let srcXNorm = xNorm;
+      let srcYNorm = yNorm;
+
+      if (orientation === 'right' || orientation === 'landscape-right') {
+        // 90 degrees CW rotation
+        srcXNorm = yNorm;
+        srcYNorm = 1 - xNorm;
+      } else if (orientation === 'left' || orientation === 'landscape-left') {
+        // 270 degrees CW (90 degrees CCW) rotation
+        srcXNorm = 1 - yNorm;
+        srcYNorm = xNorm;
+      } else if (orientation === 'down' || orientation === 'portrait-upside-down') {
+        // 180 degrees rotation
+        srcXNorm = 1 - xNorm;
+        srcYNorm = 1 - yNorm;
+      }
+
+      const srcX = Math.min(Math.floor(srcXNorm * srcWidth), srcWidth - 1);
+      const srcY = Math.min(Math.floor(srcYNorm * srcHeight), srcHeight - 1);
+
       const srcIdx = (srcY * srcWidth + srcX) * bytesPerPixel;
       const dstIdx = (y * dstWidth + x) * 3;
-      // Pass raw pixel values [0, 255] as float32.
-      // YuNet TFLite models exported from OpenCV include internal normalization.
-      dst[dstIdx] = src[srcIdx];
-      dst[dstIdx + 1] = src[srcIdx + 1];
-      dst[dstIdx + 2] = src[srcIdx + 2];
+
+      // Swapping Red & Blue to feed BGR channel order to YuNet (OpenCV format)
+      dst[dstIdx] = src[srcIdx + 2];     // B
+      dst[dstIdx + 1] = src[srcIdx + 1]; // G
+      dst[dstIdx + 2] = src[srcIdx];     // R
     }
   }
 
@@ -483,7 +504,7 @@ export class YuNetService {
             lastCentered: false,
             lastFaceX: -1,
             lastFaceY: -1,
-            lastCaptureState: CAPTURE_STATE.NO_FACE,
+            lastCaptureState: CAPTURE_STATE.NO_FACE as string,
           };
         }
         const throttleState = globalFrameRef.__throttleState;
@@ -523,7 +544,8 @@ export class YuNetService {
             fw,
             fh,
             320,
-            320
+            320,
+            frame.orientation
           );
           let inputMin = Number.POSITIVE_INFINITY;
           let inputMax = Number.NEGATIVE_INFINITY;
@@ -623,7 +645,7 @@ export class YuNetService {
           handleResult(result);
         }
 
-        let captureState = CAPTURE_STATE.NO_FACE;
+        let captureState: string = CAPTURE_STATE.NO_FACE;
         if (result.faceCount > 0 && !currentCentered) {
           captureState = CAPTURE_STATE.FACE_NOT_CENTERED;
         } else if (result.faceCount > 0 && currentCentered) {

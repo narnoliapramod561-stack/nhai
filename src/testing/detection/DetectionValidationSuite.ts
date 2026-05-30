@@ -1,5 +1,5 @@
 import { ValidationSuite, ValidationResult } from '../ValidationTypes';
-import { DetectionDecoder } from '../../biometrics/detection/DetectionDecoder';
+import { decodeDetections } from '../../biometrics/detection/DetectionDecoder';
 
 export class DetectionValidationSuite implements ValidationSuite {
   name = 'Detection Validation Suite';
@@ -22,7 +22,7 @@ export class DetectionValidationSuite implements ValidationSuite {
       const mockTensors = Array(12).fill(new ArrayBuffer(100));
       try {
         // Will likely return empty since it's random bytes, but shouldn't crash
-        DetectionDecoder.decode(mockTensors);
+        decodeDetections(mockTensors);
       } catch (e: any) {
         if (!e.message.includes('Invalid shape')) throw e; // Expect shape error if strict, otherwise pass
       }

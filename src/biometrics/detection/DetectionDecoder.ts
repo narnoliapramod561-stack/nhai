@@ -1,3 +1,5 @@
+declare const global: any;
+
 import { FaceDetection, FaceLandmarks } from './DetectionTypes';
 
 const INPUT_SIZE = 320;
