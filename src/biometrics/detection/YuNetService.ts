@@ -8,10 +8,9 @@ import { DetectionResult, FaceDetection, FaceLandmarks } from './DetectionTypes'
 
 const INPUT_SIZE = 320;
 const IOU_THRESHOLD = 0.3;
-// 0.7 aligns with the offline decoder policy and avoids the production "always NO_FACE"
-// condition observed with the previous 0.9 threshold.
 const CONFIDENCE_THRESHOLD = 0.7;
 const STACK_TRACE_PREVIEW_LINES = 3;
+const FORENSIC_THRESHOLDS = [0.1, 0.05, 0.01] as const;
 const CAPTURE_STATE = {
   NO_FACE: 'NO_FACE',
   FACE_NOT_CENTERED: 'FACE_NOT_CENTERED',
@@ -119,6 +118,9 @@ interface DecodeStats {
   rawOutputCount: number;
   postThresholdCount: number;
   postNmsCount: number;
+  maxConfidence: number;
+  maxConfidenceAnchorIndex: number;
+  thresholdSweepCounts: Record<string, number>;
 }
 
 function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]; stats: DecodeStats } {
@@ -132,6 +134,13 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
         rawOutputCount: 0,
         postThresholdCount: 0,
         postNmsCount: 0,
+        maxConfidence: 0,
+        maxConfidenceAnchorIndex: -1,
+        thresholdSweepCounts: {
+          '0.1': 0,
+          '0.05': 0,
+          '0.01': 0,
+        },
       },
     };
   }
@@ -157,6 +166,68 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
   const anchors = generateAnchors();
   const detections: FaceDetection[] = [];
   let postThresholdCount = 0;
+  let maxConfidence = 0;
+  let maxConfidenceAnchorIndex = -1;
+  const thresholdSweepCounts: Record<string, number> = {
+    '0.1': 0,
+    '0.05': 0,
+    '0.01': 0,
+  };
+
+  const cls8Min = Math.min(...cls_8);
+  const cls8Max = Math.max(...cls_8);
+  const obj8Min = Math.min(...obj_8);
+  const obj8Max = Math.max(...obj_8);
+  const clsObjAlreadyProbability = cls8Min >= 0 && cls8Max <= 1 && obj8Min >= 0 && obj8Max <= 1;
+
+  const globalRef = global as any;
+  if (!globalRef.__yunetOutputFormatLogged) {
+    globalRef.__yunetOutputFormatLogged = true;
+    console.log('[DEBUG_AUDIT] OUTPUT_TENSOR_LAYOUT: cls/obj/bbox/kps x [8,16,32]');
+    console.log(
+      '[DEBUG_AUDIT] OUTPUT_TENSOR_SHAPES: cls8=' +
+        cls_8.length +
+        ' cls16=' +
+        cls_16.length +
+        ' cls32=' +
+        cls_32.length +
+        ' obj8=' +
+        obj_8.length +
+        ' obj16=' +
+        obj_16.length +
+        ' obj32=' +
+        obj_32.length +
+        ' bbox8=' +
+        bbox_8.length +
+        ' bbox16=' +
+        bbox_16.length +
+        ' bbox32=' +
+        bbox_32.length +
+        ' kps8=' +
+        kps_8.length +
+        ' kps16=' +
+        kps_16.length +
+        ' kps32=' +
+        kps_32.length
+    );
+    console.log(
+      '[DEBUG_AUDIT] OUTPUT_VALUE_RANGE: cls8Min=' +
+        cls8Min +
+        ' cls8Max=' +
+        cls8Max +
+        ' obj8Min=' +
+        obj8Min +
+        ' obj8Max=' +
+        obj8Max
+    );
+    console.log('[DEBUG_AUDIT] OUTPUT_CONF_DOMAIN: ' + (clsObjAlreadyProbability ? 'PROBABILITY' : 'LOGIT'));
+    console.log('[DEBUG_AUDIT] OUTPUT_FIRST20_CLS8: ' + Array.from(cls_8.slice(0, 20)).join(','));
+    console.log('[DEBUG_AUDIT] OUTPUT_FIRST20_OBJ8: ' + Array.from(obj_8.slice(0, 20)).join(','));
+  }
+
+  const shouldLogScoreDistribution = !globalRef.__yunetConfidenceDistributionLogged;
+  const scoreFirst50: number[] = [];
+  const scoreSigmoidFirst50: number[] = [];
 
   // We have 2100 anchors (1600 + 400 + 100)
   for (let i = 0; i < anchors.length; i++) {
@@ -191,11 +262,27 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
       kpsBase = idx * 10;
     }
 
-    // YuNet emits separate class/objectness logits per anchor; multiplying their
-    // probabilities yields the joint confidence that this anchor contains a face.
-    const clsProb = sigmoid(clsVal);
-    const objProb = sigmoid(objVal);
+    // Some exports emit cls/obj logits, others emit probabilities in [0,1].
+    // Detect and decode adaptively from actual runtime tensor values.
+    const clsProb = clsObjAlreadyProbability ? clsVal : sigmoid(clsVal);
+    const objProb = clsObjAlreadyProbability ? objVal : sigmoid(objVal);
     const score = clsProb * objProb;
+    if (shouldLogScoreDistribution && i < 50) {
+      const scoreSigmoid = sigmoid(clsVal) * sigmoid(objVal);
+      scoreFirst50.push(score);
+      scoreSigmoidFirst50.push(scoreSigmoid);
+    }
+
+    if (score > maxConfidence) {
+      maxConfidence = score;
+      maxConfidenceAnchorIndex = i;
+    }
+
+    for (const threshold of FORENSIC_THRESHOLDS) {
+      if (score > threshold) {
+        thresholdSweepCounts[String(threshold)]++;
+      }
+    }
 
     if (score > CONFIDENCE_THRESHOLD) {
       postThresholdCount++;
@@ -246,12 +333,42 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
   }
 
   const postNms = nms(detections);
+  if (shouldLogScoreDistribution && scoreFirst50.length > 0) {
+    globalRef.__yunetConfidenceDistributionLogged = true;
+    const scoreMin = Math.min(...scoreFirst50);
+    const scoreMax = Math.max(...scoreFirst50);
+    const scoreMean = scoreFirst50.reduce((sum, val) => sum + val, 0) / scoreFirst50.length;
+    const scoreSigmoidMin = Math.min(...scoreSigmoidFirst50);
+    const scoreSigmoidMax = Math.max(...scoreSigmoidFirst50);
+    const scoreSigmoidMean =
+      scoreSigmoidFirst50.reduce((sum, val) => sum + val, 0) / scoreSigmoidFirst50.length;
+    console.log(
+      '[DEBUG_AUDIT] SCORE_DIST_FIRST50_ADAPTIVE: min=' +
+        scoreMin +
+        ' max=' +
+        scoreMax +
+        ' mean=' +
+        scoreMean
+    );
+    console.log(
+      '[DEBUG_AUDIT] SCORE_DIST_FIRST50_SIGMOID: min=' +
+        scoreSigmoidMin +
+        ' max=' +
+        scoreSigmoidMax +
+        ' mean=' +
+        scoreSigmoidMean
+    );
+  }
+
   return {
     detections: postNms,
     stats: {
       rawOutputCount: anchors.length,
       postThresholdCount,
       postNmsCount: postNms.length,
+      maxConfidence,
+      maxConfidenceAnchorIndex,
+      thresholdSweepCounts,
     },
   };
 }
@@ -408,6 +525,22 @@ export class YuNetService {
             320,
             320
           );
+          let inputMin = Number.POSITIVE_INFINITY;
+          let inputMax = Number.NEGATIVE_INFINITY;
+          let inputSum = 0;
+          for (let i = 0; i < inputBuffer.length; i++) {
+            const value = inputBuffer[i];
+            if (value < inputMin) inputMin = value;
+            if (value > inputMax) inputMax = value;
+            inputSum += value;
+          }
+          console.log('[DEBUG_AUDIT] INPUT_TENSOR_STATS: min=' + inputMin + ' max=' + inputMax + ' mean=' + inputSum / inputBuffer.length);
+          if (!globalFrameRef.__yunetInputLayoutLogged) {
+            globalFrameRef.__yunetInputLayoutLogged = true;
+            console.log('[DEBUG_AUDIT] INPUT_LAYOUT_SENT: NHWC_FLAT');
+            console.log('[DEBUG_AUDIT] INPUT_CHANNEL_ORDER_SENT: RGB');
+            console.log('[DEBUG_AUDIT] INPUT_NORMALIZATION_SENT: 0_TO_255_FLOAT32');
+          }
 
           // Run inference synchronously
           console.log('[DEBUG_AUDIT] INFERENCE_START');
@@ -420,6 +553,10 @@ export class YuNetService {
           console.log('[DEBUG_AUDIT] RAW_OUTPUT_COUNT: ' + decoded.stats.rawOutputCount);
           console.log('[DEBUG_AUDIT] POST_THRESHOLD_COUNT: ' + decoded.stats.postThresholdCount);
           console.log('[DEBUG_AUDIT] POST_NMS_COUNT: ' + decoded.stats.postNmsCount);
+          console.log('[DEBUG_AUDIT] THRESHOLD_COUNT_0.1: ' + decoded.stats.thresholdSweepCounts['0.1']);
+          console.log('[DEBUG_AUDIT] THRESHOLD_COUNT_0.05: ' + decoded.stats.thresholdSweepCounts['0.05']);
+          console.log('[DEBUG_AUDIT] THRESHOLD_COUNT_0.01: ' + decoded.stats.thresholdSweepCounts['0.01']);
+          console.log('[DEBUG_AUDIT] TOP_CONFIDENCE: ' + decoded.stats.maxConfidence + ' anchorIndex=' + decoded.stats.maxConfidenceAnchorIndex);
           console.log('[DEBUG_AUDIT] FACE_COUNT: ' + detections.length);
 
           inferenceTimeMs = (Date.now ? Date.now() : 0) - startTime;
