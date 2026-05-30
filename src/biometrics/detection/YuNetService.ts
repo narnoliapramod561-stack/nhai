@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { Platform } from 'react-native';
 import { scheduleOnRN } from 'react-native-worklets';
 import { NitroModules } from 'react-native-nitro-modules';
@@ -320,13 +320,13 @@ export class YuNetService {
       [plugin.state, plugin.model]
     );
 
-    useEffect(() => {
-      if (plugin.state === 'loaded') {
-        console.log('[DEBUG_AUDIT] MODEL_LOAD_SUCCESS');
-      } else if (plugin.state === 'error') {
-        console.log('[DEBUG_AUDIT] MODEL_LOAD_FAIL: ' + (plugin.error?.message || 'unknown'));
-      }
-    }, [plugin.state, plugin.error]);
+    if (plugin.state === 'loaded' && globalRef.__yunetModelLoadState !== 'loaded') {
+      globalRef.__yunetModelLoadState = 'loaded';
+      console.log('[DEBUG_AUDIT] MODEL_LOAD_SUCCESS');
+    } else if (plugin.state === 'error' && globalRef.__yunetModelLoadState !== 'error') {
+      globalRef.__yunetModelLoadState = 'error';
+      console.log('[DEBUG_AUDIT] MODEL_LOAD_FAIL: ' + (plugin.error?.message || 'unknown'));
+    }
 
     // 2. Callback wrapper to run on JS thread
     const handleResult = useMemo(() => {
