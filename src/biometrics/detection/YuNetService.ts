@@ -11,6 +11,12 @@ const IOU_THRESHOLD = 0.3;
 // 0.7 aligns with the offline decoder policy and avoids the production "always NO_FACE"
 // condition observed with the previous 0.9 threshold.
 const CONFIDENCE_THRESHOLD = 0.7;
+const STACK_TRACE_PREVIEW_LINES = 3;
+const CAPTURE_STATE = {
+  NO_FACE: 'NO_FACE',
+  FACE_NOT_CENTERED: 'FACE_NOT_CENTERED',
+  READY_TO_CAPTURE: 'READY_TO_CAPTURE',
+} as const;
 
 interface Anchor {
   x: number;
@@ -185,7 +191,8 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
       kpsBase = idx * 10;
     }
 
-    // YuNet heads are expected to be logits and are converted to probabilities.
+    // YuNet emits separate class/objectness logits per anchor; multiplying their
+    // probabilities yields the joint confidence that this anchor contains a face.
     const clsProb = sigmoid(clsVal);
     const objProb = sigmoid(objVal);
     const score = clsProb * objProb;
@@ -359,7 +366,7 @@ export class YuNetService {
             lastCentered: false,
             lastFaceX: -1,
             lastFaceY: -1,
-            lastCaptureState: 'NO_FACE',
+            lastCaptureState: CAPTURE_STATE.NO_FACE,
           };
         }
         const throttleState = globalFrameRef.__throttleState;
@@ -417,7 +424,10 @@ export class YuNetService {
 
           inferenceTimeMs = (Date.now ? Date.now() : 0) - startTime;
         } catch (e: any) {
-          const stackPreview = (e?.stack || 'none').split('\n').slice(0, 3).join(' | ');
+          const stackPreview = (e?.stack || 'none')
+            .split('\n')
+            .slice(0, STACK_TRACE_PREVIEW_LINES)
+            .join(' | ');
           console.log(
             '[DEBUG_AUDIT] INFERENCE_FAIL: ' +
               (e?.message || String(e)) +
@@ -476,11 +486,11 @@ export class YuNetService {
           handleResult(result);
         }
 
-        let captureState = 'NO_FACE';
+        let captureState = CAPTURE_STATE.NO_FACE;
         if (result.faceCount > 0 && !currentCentered) {
-          captureState = 'FACE_NOT_CENTERED';
+          captureState = CAPTURE_STATE.FACE_NOT_CENTERED;
         } else if (result.faceCount > 0 && currentCentered) {
-          captureState = 'READY_TO_CAPTURE';
+          captureState = CAPTURE_STATE.READY_TO_CAPTURE;
         }
         if (captureState !== throttleState.lastCaptureState) {
           throttleState.lastCaptureState = captureState;
