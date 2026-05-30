@@ -1,0 +1,221 @@
+{
+  "status": "PASS",
+  "comparisons": [
+    {
+      "onnx_tensor": "cls_8",
+      "tflite_tensor": "cls_8",
+      "onnx_shape": [
+        1,
+        1600,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        1600,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "cls_16",
+      "tflite_tensor": "cls_16",
+      "onnx_shape": [
+        1,
+        400,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        400,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "cls_32",
+      "tflite_tensor": "cls_32",
+      "onnx_shape": [
+        1,
+        100,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        100,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "obj_8",
+      "tflite_tensor": "obj_8",
+      "onnx_shape": [
+        1,
+        1600,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        1600,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.1922,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "obj_16",
+      "tflite_tensor": "obj_16",
+      "onnx_shape": [
+        1,
+        400,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        400,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0909,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "obj_32",
+      "tflite_tensor": "obj_32",
+      "onnx_shape": [
+        1,
+        100,
+        1
+      ],
+      "tflite_shape": [
+        1,
+        100,
+        1
+      ],
+      "max_abs_diff": 0.0,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0475,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "bbox_8",
+      "tflite_tensor": "bbox_8",
+      "onnx_shape": [
+        1,
+        1600,
+        4
+      ],
+      "tflite_shape": [
+        1,
+        1600,
+        4
+      ],
+      "max_abs_diff": 1e-06,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0003,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "bbox_16",
+      "tflite_tensor": "bbox_16",
+      "onnx_shape": [
+        1,
+        400,
+        4
+      ],
+      "tflite_shape": [
+        1,
+        400,
+        4
+      ],
+      "max_abs_diff": 1e-06,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "bbox_32",
+      "tflite_tensor": "bbox_32",
+      "onnx_shape": [
+        1,
+        100,
+        4
+      ],
+      "tflite_shape": [
+        1,
+        100,
+        4
+      ],
+      "max_abs_diff": 1e-06,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0001,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "kps_8",
+      "tflite_tensor": "kps_8",
+      "onnx_shape": [
+        1,
+        1600,
+        10
+      ],
+      "tflite_shape": [
+        1,
+        1600,
+        10
+      ],
+      "max_abs_diff": 1e-06,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0001,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "kps_16",
+      "tflite_tensor": "kps_16",
+      "onnx_shape": [
+        1,
+        400,
+        10
+      ],
+      "tflite_shape": [
+        1,
+        400,
+        10
+      ],
+      "max_abs_diff": 1e-06,
+      "mean_abs_diff": 0.0,
+      "mean_rel_diff_pct": 0.0,
+      "status": "PASS"
+    },
+    {
+      "onnx_tensor": "kps_32",
+      "tflite_tensor": "kps_32",
+      "onnx_shape": [
+        1,
+        100,
+        10
+      ],
+      "tflite_shape": [
+        1,
+        100,
+        10
+      ],
+      "max_abs_diff": 3e-06,
+      "mean_abs_diff": 1e-06,
+      "mean_rel_diff_pct": 0.0001,
+      "status": "PASS"
+    }
+  ]
+}

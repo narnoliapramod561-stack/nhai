@@ -1,6 +1,10 @@
+import com.facebook.react.ReactSettingsExtension
+
 pluginManagement { includeBuild("../node_modules/@react-native/gradle-plugin") }
 plugins { id("com.facebook.react.settings") }
-extensions.configure(com.facebook.react.ReactSettingsExtension){ ex -> ex.autolinkLibrariesFromCommand() }
+extensions.configure(ReactSettingsExtension) { reactSettings ->
+    reactSettings.autolinkLibrariesFromCommand(["/opt/homebrew/bin/npx", "@react-native-community/cli", "config"])
+}
 rootProject.name = 'NhaiApp'
 include ':app'
 includeBuild('../node_modules/@react-native/gradle-plugin')
