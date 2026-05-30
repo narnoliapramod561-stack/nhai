@@ -183,9 +183,9 @@ function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]
       kpsBase = idx * 10;
     }
 
-    // Some YuNet exports emit logits while others emit probabilities.
-    const clsProb = clsVal >= 0 && clsVal <= 1 ? clsVal : sigmoid(clsVal);
-    const objProb = objVal >= 0 && objVal <= 1 ? objVal : sigmoid(objVal);
+    // YuNet heads are expected to be logits and are converted to probabilities.
+    const clsProb = sigmoid(clsVal);
+    const objProb = sigmoid(objVal);
     const score = clsProb * objProb;
 
     if (score > CONFIDENCE_THRESHOLD) {
@@ -415,7 +415,12 @@ export class YuNetService {
 
           inferenceTimeMs = (Date.now ? Date.now() : 0) - startTime;
         } catch (e: any) {
-          console.log('[DEBUG_AUDIT] INFERENCE_FAIL: ' + (e?.message || String(e)));
+          console.log(
+            '[DEBUG_AUDIT] INFERENCE_FAIL: ' +
+              (e?.message || String(e)) +
+              ' stack=' +
+              (e?.stack || 'none')
+          );
           detections = [];
         }
 
