@@ -8,15 +8,21 @@ import { DetectionResult, FaceDetection, FaceLandmarks } from './DetectionTypes'
 
 const INPUT_SIZE = 320;
 const IOU_THRESHOLD = 0.3;
-const CONFIDENCE_THRESHOLD = 0.9;
+// 0.7 aligns with the offline decoder policy and avoids the production "always NO_FACE"
+// condition observed with the previous 0.9 threshold.
+const CONFIDENCE_THRESHOLD = 0.7;
+const STACK_TRACE_PREVIEW_LINES = 3;
+const CAPTURE_STATE = {
+  NO_FACE: 'NO_FACE',
+  FACE_NOT_CENTERED: 'FACE_NOT_CENTERED',
+  READY_TO_CAPTURE: 'READY_TO_CAPTURE',
+} as const;
 
 interface Anchor {
   x: number;
   y: number;
   scale: number;
 }
-
-let _anchorsCache: Anchor[] | null = null;
 
 function generateAnchors(): Anchor[] {
   'worklet';
@@ -109,11 +115,26 @@ function checkIsCentered(bbox: any): boolean {
   return isCenteredX && isCenteredY && isLargeEnough;
 }
 
-function decodeDetections(tensors: ArrayBuffer[]): FaceDetection[] {
+interface DecodeStats {
+  rawOutputCount: number;
+  postThresholdCount: number;
+  postNmsCount: number;
+}
+
+function decodeDetections(tensors: ArrayBuffer[]): { detections: FaceDetection[]; stats: DecodeStats } {
   'worklet';
   
   // TFLite outputs an array of ArrayBuffers (12 tensors)
-  if (!tensors || tensors.length !== 12) return [];
+  if (!tensors || tensors.length !== 12) {
+    return {
+      detections: [],
+      stats: {
+        rawOutputCount: 0,
+        postThresholdCount: 0,
+        postNmsCount: 0,
+      },
+    };
+  }
 
   // In JS context, the model outputs might be out of order if we don't map them carefully,
   // but assuming standard TFLite mapping per validate script:
@@ -135,6 +156,7 @@ function decodeDetections(tensors: ArrayBuffer[]): FaceDetection[] {
 
   const anchors = generateAnchors();
   const detections: FaceDetection[] = [];
+  let postThresholdCount = 0;
 
   // We have 2100 anchors (1600 + 400 + 100)
   for (let i = 0; i < anchors.length; i++) {
@@ -169,11 +191,14 @@ function decodeDetections(tensors: ArrayBuffer[]): FaceDetection[] {
       kpsBase = idx * 10;
     }
 
-    // YuNet TFLite outputs cls as a post-sigmoid probability.
-    // Calculate score using classification probability directly without additional sigmoid.
-    const score = clsVal;
+    // YuNet emits separate class/objectness logits per anchor; multiplying their
+    // probabilities yields the joint confidence that this anchor contains a face.
+    const clsProb = sigmoid(clsVal);
+    const objProb = sigmoid(objVal);
+    const score = clsProb * objProb;
 
     if (score > CONFIDENCE_THRESHOLD) {
+      postThresholdCount++;
       // Decode bbox
       const cx = anchor.x + bboxArray[bboxBase] * anchor.scale;
       const cy = anchor.y + bboxArray[bboxBase + 1] * anchor.scale;
@@ -220,7 +245,15 @@ function decodeDetections(tensors: ArrayBuffer[]): FaceDetection[] {
     }
   }
 
-  return nms(detections);
+  const postNms = nms(detections);
+  return {
+    detections: postNms,
+    stats: {
+      rawOutputCount: anchors.length,
+      postThresholdCount,
+      postNmsCount: postNms.length,
+    },
+  };
 }
 
 /**
@@ -279,6 +312,12 @@ export class YuNetService {
    * @param onDetection Callback fired on the JS thread when detections are ready.
    */
   static useYuNetDetection(onDetection: (result: DetectionResult) => void) {
+    const globalRef = global as any;
+    if (!globalRef.__yunetModelLoadStarted) {
+      globalRef.__yunetModelLoadStarted = true;
+      console.log('[DEBUG_AUDIT] MODEL_LOAD_START');
+    }
+
     // 1. Load the model with hardware acceleration fallback
     const plugin = useTensorflowModel(
       require('../../../assets/models/face_detection_yunet_fp32.tflite'),
@@ -289,6 +328,14 @@ export class YuNetService {
       () => (plugin.state === 'loaded' && plugin.model ? NitroModules.box(plugin.model) : undefined),
       [plugin.state, plugin.model]
     );
+
+    if (plugin.state === 'loaded' && globalRef.__yunetModelLoadState !== 'loaded') {
+      globalRef.__yunetModelLoadState = 'loaded';
+      console.log('[DEBUG_AUDIT] MODEL_LOAD_SUCCESS');
+    } else if (plugin.state === 'error' && globalRef.__yunetModelLoadState !== 'error') {
+      globalRef.__yunetModelLoadState = 'error';
+      console.log('[DEBUG_AUDIT] MODEL_LOAD_FAIL: ' + (plugin.error?.message || 'unknown'));
+    }
 
     // 2. Callback wrapper to run on JS thread
     const handleResult = useMemo(() => {
@@ -310,21 +357,19 @@ export class YuNetService {
 
         const model = boxedModel.unbox();
 
-        const globalRef = global as any;
-        if (!globalRef.__throttleState) {
-          globalRef.__throttleState = {
+        const globalFrameRef = global as any;
+        if (!globalFrameRef.__throttleState) {
+          globalFrameRef.__throttleState = {
             lastInferenceTime: 0,
             lastBridgeTime: 0,
             lastFaceCount: -1,
             lastCentered: false,
             lastFaceX: -1,
             lastFaceY: -1,
+            lastCaptureState: CAPTURE_STATE.NO_FACE,
           };
         }
-        if (!globalRef.__debugLogCount) {
-          globalRef.__debugLogCount = 0;
-        }
-        const throttleState = globalRef.__throttleState;
+        const throttleState = globalFrameRef.__throttleState;
 
         const now = Date.now ? Date.now() : 0;
 
@@ -344,8 +389,8 @@ export class YuNetService {
         console.log('[DEBUG_AUDIT] FRAME_RECEIVED: true');
         console.log('[DEBUG_AUDIT] FRAME_WIDTH: ' + fw);
         console.log('[DEBUG_AUDIT] FRAME_HEIGHT: ' + fh);
-        console.log('[DEBUG_AUDIT] PIXEL_FORMAT: ' + frame.pixelFormat);
-        console.log('[DEBUG_AUDIT] ROTATION: ' + frame.orientation);
+        console.log('[DEBUG_AUDIT] FRAME_FORMAT: ' + frame.pixelFormat);
+        console.log('[DEBUG_AUDIT] FRAME_ROTATION: ' + frame.orientation);
 
         let detections: FaceDetection[] = [];
         let inferenceTimeMs = 0;
@@ -365,18 +410,31 @@ export class YuNetService {
           );
 
           // Run inference synchronously
+          console.log('[DEBUG_AUDIT] INFERENCE_START');
           const outputs = model.runSync([inputBuffer.buffer as ArrayBuffer]);
-          console.log('[DEBUG_AUDIT] YUNET_OUTPUT_COUNT: ' + (outputs ? outputs.length : 0));
+          console.log('[DEBUG_AUDIT] INFERENCE_SUCCESS');
 
           // Decode the 12 FPN output tensors
-          detections = decodeDetections(outputs as ArrayBuffer[]);
+          const decoded = decodeDetections(outputs as ArrayBuffer[]);
+          detections = decoded.detections;
+          console.log('[DEBUG_AUDIT] RAW_OUTPUT_COUNT: ' + decoded.stats.rawOutputCount);
+          console.log('[DEBUG_AUDIT] POST_THRESHOLD_COUNT: ' + decoded.stats.postThresholdCount);
+          console.log('[DEBUG_AUDIT] POST_NMS_COUNT: ' + decoded.stats.postNmsCount);
           console.log('[DEBUG_AUDIT] FACE_COUNT: ' + detections.length);
 
           inferenceTimeMs = (Date.now ? Date.now() : 0) - startTime;
         } catch (e: any) {
-          console.log('[DEBUG_AUDIT] ERROR: ' + (e?.message || String(e)));
-          // Rethrow to preserve native crash logs / behavior
-          throw e;
+          const stackPreview = (e?.stack || 'none')
+            .split('\n')
+            .slice(0, STACK_TRACE_PREVIEW_LINES)
+            .join(' | ');
+          console.log(
+            '[DEBUG_AUDIT] INFERENCE_FAIL: ' +
+              (e?.message || String(e)) +
+              ' stack=' +
+              stackPreview
+          );
+          detections = [];
         }
 
         // Find the largest face
@@ -426,6 +484,18 @@ export class YuNetService {
           throttleState.lastBridgeTime = now;
           
           handleResult(result);
+        }
+
+        let captureState = CAPTURE_STATE.NO_FACE;
+        if (result.faceCount > 0 && !currentCentered) {
+          captureState = CAPTURE_STATE.FACE_NOT_CENTERED;
+        } else if (result.faceCount > 0 && currentCentered) {
+          captureState = CAPTURE_STATE.READY_TO_CAPTURE;
+        }
+        if (captureState !== throttleState.lastCaptureState) {
+          throttleState.lastCaptureState = captureState;
+          console.log('[DEBUG_AUDIT] CAPTURE_STATE: ' + captureState);
+          console.log('[DEBUG_AUDIT] IS_CENTERED: ' + currentCentered);
         }
 
         // Always dispose frame after processing
