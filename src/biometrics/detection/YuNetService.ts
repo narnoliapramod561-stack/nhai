@@ -8,6 +8,8 @@ import { DetectionResult, FaceDetection, FaceLandmarks } from './DetectionTypes'
 
 const INPUT_SIZE = 320;
 const IOU_THRESHOLD = 0.3;
+// 0.7 aligns with the offline decoder policy and avoids the production "always NO_FACE"
+// condition observed with the previous 0.9 threshold.
 const CONFIDENCE_THRESHOLD = 0.7;
 
 interface Anchor {
@@ -357,7 +359,7 @@ export class YuNetService {
             lastCentered: false,
             lastFaceX: -1,
             lastFaceY: -1,
-            lastCaptureState: '',
+            lastCaptureState: 'NO_FACE',
           };
         }
         const throttleState = globalFrameRef.__throttleState;
@@ -415,11 +417,12 @@ export class YuNetService {
 
           inferenceTimeMs = (Date.now ? Date.now() : 0) - startTime;
         } catch (e: any) {
+          const stackPreview = (e?.stack || 'none').split('\n').slice(0, 3).join(' | ');
           console.log(
             '[DEBUG_AUDIT] INFERENCE_FAIL: ' +
               (e?.message || String(e)) +
               ' stack=' +
-              (e?.stack || 'none')
+              stackPreview
           );
           detections = [];
         }
